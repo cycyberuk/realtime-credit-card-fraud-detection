@@ -102,41 +102,12 @@ st.markdown("""
         transform: translateY(-5px);
         box-shadow: 0 8px 15px rgba(0,0,0,0.15);
     }
-    .research-box {
-        background: #f8f9fa;
-        padding: 1.5rem;
-        border-radius: 0.8rem;
-        border: 2px solid #e9ecef;
-        margin: 1rem 0;
-    }
-    .citation-box {
-        background: #fff;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #6c757d;
-        font-size: 0.9rem;
-        color: #495057;
-        margin: 0.5rem 0;
-    }
     .deepseek-response {
         background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
         padding: 1.5rem;
         border-radius: 0.8rem;
         color: white;
         margin: 1rem 0;
-    }
-    .stButton > button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        padding: 0.5rem 2rem;
-        font-weight: 600;
-        border-radius: 0.5rem;
-        transition: all 0.3s;
-    }
-    .stButton > button:hover {
-        transform: scale(1.05);
-        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -179,6 +150,8 @@ if 'model_metrics' not in st.session_state:
     st.session_state.model_metrics = {}
 if 'random_values' not in st.session_state:
     st.session_state.random_values = {}
+if 'deepseek_api_key' not in st.session_state:
+    st.session_state.deepseek_api_key = ""
 
 # ============================================
 # DeepSeek API Integration
@@ -304,64 +277,36 @@ class DeepSeekExplainer:
             return f"⚠️ Error: {str(e)}"
 
 # ============================================
-# Model Loading Functions - FIXED
+# Model Loading Functions
 # ============================================
 @st.cache_resource
 def load_model():
     """Load the trained model pipeline"""
     import os
-    import pickle
     
-    # Get the directory where this script is located
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # The models folder is at the root level (sibling to app folder)
     root_dir = os.path.dirname(current_dir)
     
-    # Build the correct path - models folder is at root level
-    model_path = os.path.join(root_dir, 'models', 'fraud_detection_pipeline.pkl')
-    
-    # Alternative paths to try
     possible_paths = [
-        model_path,  # Root/models/
-        os.path.join(current_dir, '..', 'models', 'fraud_detection_pipeline.pkl'),  # Same as above
-        os.path.join(current_dir, 'models', 'fraud_detection_pipeline.pkl'),  # app/models/
-        os.path.join(root_dir, 'models', 'fraud_detection_pipeline.pkl'),  # Explicit root/models/
+        os.path.join(root_dir, 'models', 'fraud_detection_pipeline.pkl'),
+        os.path.join(current_dir, 'models', 'fraud_detection_pipeline.pkl'),
+        os.path.join(current_dir, '..', 'models', 'fraud_detection_pipeline.pkl'),
     ]
     
-    # Try each path
-    for path in possible_paths:
-        if os.path.exists(path):
+    for model_path in possible_paths:
+        if os.path.exists(model_path):
             try:
-                model = joblib.load(path)
+                model = joblib.load(model_path)
                 return model
             except Exception as e:
-                st.sidebar.warning(f"Error loading from {path}: {str(e)}")
                 continue
     
-    # If we get here, no model was found
     st.sidebar.error("❌ Model not found in any location!")
-    
-    # Show directory contents for debugging
-    with st.sidebar.expander("📁 Directory Contents", expanded=False):
-        # Show root directory
-        if os.path.exists(root_dir):
-            st.write(f"Root directory ({root_dir}):")
-            files = os.listdir(root_dir)
-            st.code("\n".join(files[:15]) if files else "Empty")
-        
-        # Show models directory if it exists
-        models_dir = os.path.join(root_dir, 'models')
-        if os.path.exists(models_dir):
-            st.write(f"Models directory ({models_dir}):")
-            files = os.listdir(models_dir)
-            st.code("\n".join(files) if files else "Empty")
-    
     return None
 
 @st.cache_resource
 def get_scaler():
-    """Load the scaler if using separate files - FIXED"""
+    """Load the scaler if using separate files"""
     import os
     
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -379,11 +324,8 @@ def get_scaler():
                 scaler = joblib.load(path)
                 return scaler
             except Exception as e:
-                st.sidebar.warning(f"Could not load scaler from {path}: {str(e)}")
                 continue
     
-    # Return None if no scaler found (model might have built-in scaling)
-    st.sidebar.info("ℹ️ No separate scaler found - using model's internal scaling if available")
     return None
 
 # ============================================
@@ -393,8 +335,8 @@ def save_prediction_to_history(input_data, prediction, probability, pca_features
     """Save prediction to session history"""
     st.session_state.prediction_history.append({
         'timestamp': datetime.now(),
-        'amount': input_data['Amount'],
-        'time': input_data['Time'],
+        'amount': float(input_data['Amount']),
+        'time': float(input_data['Time']),
         'prediction': int(prediction),
         'probability': float(probability),
         'risk_level': 'High' if probability > 0.5 else 'Medium' if probability > 0.2 else 'Low',
@@ -458,6 +400,16 @@ def calculate_model_metrics(y_true, y_pred, y_prob):
     from sklearn.metrics import (accuracy_score, precision_score, recall_score, 
                                f1_score, roc_auc_score, confusion_matrix)
     
+    if len(y_true) == 0:
+        return {
+            'accuracy': 0,
+            'precision': 0,
+            'recall': 0,
+            'f1_score': 0,
+            'roc_auc': 0,
+            'confusion_matrix': [[0, 0], [0, 0]]
+        }
+    
     metrics = {
         'accuracy': accuracy_score(y_true, y_pred),
         'precision': precision_score(y_true, y_pred, zero_division=0),
@@ -469,7 +421,7 @@ def calculate_model_metrics(y_true, y_pred, y_prob):
     return metrics
 
 # ============================================
-# Visualization Functions
+# Visualization Functions - FIXED
 # ============================================
 def plot_risk_gauge(probability):
     """Create an interactive risk gauge"""
@@ -524,20 +476,23 @@ def plot_feature_importance_radar(pca_features):
 
 def plot_confusion_matrix(cm, title="Confusion Matrix"):
     """Plot confusion matrix"""
-    fig, ax = plt.subplots(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                xticklabels=['Legitimate', 'Fraud'],
-                yticklabels=['Legitimate', 'Fraud'],
-                ax=ax)
-    ax.set_title(title, fontsize=14, fontweight='bold')
-    ax.set_xlabel('Predicted', fontsize=12)
-    ax.set_ylabel('Actual', fontsize=12)
-    plt.tight_layout()
-    return fig
+    try:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                    xticklabels=['Legitimate', 'Fraud'],
+                    yticklabels=['Legitimate', 'Fraud'],
+                    ax=ax)
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.set_xlabel('Predicted', fontsize=12)
+        ax.set_ylabel('Actual', fontsize=12)
+        plt.tight_layout()
+        return fig
+    except:
+        return None
 
 def plot_roc_curve(y_true, y_prob):
     """Plot ROC curve"""
-    if len(np.unique(y_true)) < 2:
+    if len(y_true) == 0 or len(np.unique(y_true)) < 2:
         return None
     
     fpr, tpr, _ = roc_curve(y_true, y_prob)
@@ -560,90 +515,114 @@ def plot_roc_curve(y_true, y_prob):
     return fig
 
 def plot_risk_distribution(history_df):
-    """Plot risk distribution"""
-    fig = make_subplots(rows=1, cols=2, 
-                        subplot_titles=('Risk Level Distribution', 'Fraud Probability Distribution'))
+    """Plot risk distribution - FIXED"""
+    if len(history_df) == 0:
+        return None
     
-    # Pie chart
-    risk_counts = history_df['risk_level'].value_counts()
-    colors = {'High': 'red', 'Medium': 'orange', 'Low': 'green'}
-    fig.add_trace(
-        go.Pie(labels=risk_counts.index, values=risk_counts.values,
-               marker=dict(colors=[colors.get(x, 'blue') for x in risk_counts.index]),
-               showlegend=True),
-        row=1, col=1
-    )
-    
-    # Histogram
-    fig.add_trace(
-        go.Histogram(x=history_df['probability'], nbinsx=20,
-                    marker_color='blue', opacity=0.7),
-        row=1, col=2
-    )
-    
-    fig.update_layout(height=400, showlegend=False)
-    return fig
+    try:
+        fig = make_subplots(rows=1, cols=2, 
+                            subplot_titles=('Risk Level Distribution', 'Fraud Probability Distribution'))
+        
+        # Pie chart
+        risk_counts = history_df['risk_level'].value_counts()
+        colors = {'High': 'red', 'Medium': 'orange', 'Low': 'green'}
+        
+        # Add pie trace
+        fig.add_trace(
+            go.Pie(labels=risk_counts.index.tolist(), 
+                   values=risk_counts.values.tolist(),
+                   marker=dict(colors=[colors.get(x, 'blue') for x in risk_counts.index]),
+                   showlegend=True),
+            row=1, col=1
+        )
+        
+        # Histogram
+        fig.add_trace(
+            go.Histogram(x=history_df['probability'], nbinsx=20,
+                        marker_color='blue', opacity=0.7),
+            row=1, col=2
+        )
+        
+        fig.update_layout(height=400, showlegend=False)
+        return fig
+    except Exception as e:
+        return None
 
 def plot_amount_analysis(history_df):
     """Plot amount analysis"""
-    fig = make_subplots(rows=1, cols=2,
-                        subplot_titles=('Amount Distribution', 'Amount vs Risk Level'))
+    if len(history_df) == 0:
+        return None
     
-    # Box plot
-    fig.add_trace(
-        go.Box(y=history_df['amount'], name='All Transactions',
-               marker_color='lightblue'),
-        row=1, col=1
-    )
-    
-    # Scatter plot
-    fig.add_trace(
-        go.Scatter(x=history_df['amount'], y=history_df['probability'],
-                  mode='markers',
-                  marker=dict(size=10, color=history_df['probability'],
-                            colorscale='RdYlGn_r', showscale=True),
-                  text=history_df['risk_level'],
-                  name='Risk vs Amount'),
-        row=1, col=2
-    )
-    
-    fig.update_layout(height=400)
-    return fig
+    try:
+        fig = make_subplots(rows=1, cols=2,
+                            subplot_titles=('Amount Distribution', 'Amount vs Risk Level'))
+        
+        # Box plot
+        fig.add_trace(
+            go.Box(y=history_df['amount'], name='All Transactions',
+                   marker_color='lightblue'),
+            row=1, col=1
+        )
+        
+        # Scatter plot
+        fig.add_trace(
+            go.Scatter(x=history_df['amount'], y=history_df['probability'],
+                      mode='markers',
+                      marker=dict(size=10, color=history_df['probability'],
+                                colorscale='RdYlGn_r', showscale=True),
+                      text=history_df['risk_level'],
+                      name='Risk vs Amount'),
+            row=1, col=2
+        )
+        
+        fig.update_layout(height=400)
+        return fig
+    except Exception as e:
+        return None
 
 def plot_temporal_analysis(history_df):
     """Plot temporal analysis"""
-    fig = go.Figure()
+    if len(history_df) == 0:
+        return None
     
-    fig.add_trace(go.Scatter(x=history_df['timestamp'], 
-                            y=history_df['probability'],
-                            mode='lines+markers',
-                            name='Fraud Probability',
-                            line=dict(color='blue', width=2),
-                            marker=dict(size=8)))
-    
-    fig.add_hline(y=0.5, line_dash="dash", line_color="red",
-                  annotation_text="High Risk Threshold")
-    fig.add_hline(y=0.2, line_dash="dash", line_color="orange",
-                  annotation_text="Medium Risk Threshold")
-    
-    fig.update_layout(
-        title='Fraud Probability Over Time',
-        xaxis_title='Timestamp',
-        yaxis_title='Probability',
-        height=400,
-        hovermode='x unified'
-    )
-    return fig
+    try:
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatter(x=history_df['timestamp'], 
+                                y=history_df['probability'],
+                                mode='lines+markers',
+                                name='Fraud Probability',
+                                line=dict(color='blue', width=2),
+                                marker=dict(size=8)))
+        
+        fig.add_hline(y=0.5, line_dash="dash", line_color="red",
+                      annotation_text="High Risk Threshold")
+        fig.add_hline(y=0.2, line_dash="dash", line_color="orange",
+                      annotation_text="Medium Risk Threshold")
+        
+        fig.update_layout(
+            title='Fraud Probability Over Time',
+            xaxis_title='Timestamp',
+            yaxis_title='Probability',
+            height=400,
+            hovermode='x unified'
+        )
+        return fig
+    except Exception as e:
+        return None
 
 def plot_feature_correlation(pca_features_df):
     """Plot feature correlation heatmap"""
-    if len(pca_features_df) > 1:
-        fig, ax = plt.subplots(figsize=(10, 8))
-        sns.heatmap(pca_features_df.corr(), cmap='coolwarm', center=0,
-                   annot=False, fmt='.2f', ax=ax)
-        ax.set_title('PCA Feature Correlation Matrix', fontsize=14, fontweight='bold')
-        plt.tight_layout()
-        return fig
+    if len(pca_features_df) > 1 and len(pca_features_df.columns) > 1:
+        try:
+            fig, ax = plt.subplots(figsize=(10, 8))
+            sns.heatmap(pca_features_df.corr(), cmap='coolwarm', center=0,
+                       annot=False, fmt='.2f', ax=ax)
+            ax.set_title('PCA Feature Correlation Matrix', fontsize=14, fontweight='bold')
+            plt.tight_layout()
+            return fig
+        except:
+            return None
     return None
 
 # ============================================
@@ -717,7 +696,6 @@ def single_prediction_page(model, scaler):
             try:
                 # Make prediction
                 if hasattr(model, 'predict'):
-                    # If scaler exists, use it
                     if scaler is not None:
                         input_df_scaled = input_df.copy()
                         input_df_scaled[['Time', 'Amount']] = scaler.transform(input_df[['Time', 'Amount']])
@@ -798,7 +776,7 @@ def single_prediction_page(model, scaler):
                 st.markdown('</div>', unsafe_allow_html=True)
                 
                 # AI Explanation
-                if hasattr(st.session_state, 'deepseek_api_key') and st.session_state.deepseek_api_key:
+                if st.session_state.deepseek_api_key:
                     st.markdown("---")
                     st.subheader("🤖 AI-Powered Explanation")
                     with st.spinner("Getting AI analysis..."):
@@ -920,14 +898,21 @@ def batch_analysis_page(model, scaler):
             st.info("Please ensure your CSV has the correct columns")
 
 # ============================================
-# Page Functions - Research Dashboard
+# Page Functions - Research Dashboard - FIXED
 # ============================================
 def research_dashboard_page():
     st.header("📈 Research Dashboard")
     st.markdown("*Comprehensive analytics for research and publication*")
     
     if len(st.session_state.prediction_history) == 0:
-        st.info("No data available. Please make some predictions first!")
+        st.info("📊 No data available. Please make some predictions first!")
+        st.markdown("""
+        ### How to get started:
+        1. Go to **Single Prediction** tab
+        2. Enter transaction details or use random features
+        3. Click **Analyze Transaction** to generate predictions
+        4. Return here to see analytics
+        """)
         return
     
     df_history = pd.DataFrame(st.session_state.prediction_history)
@@ -952,14 +937,22 @@ def research_dashboard_page():
     with tab1:
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(plot_risk_distribution(df_history), use_container_width=True)
+            fig = plot_risk_distribution(df_history)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Not enough data for risk distribution visualization")
         with col2:
             st.plotly_chart(plot_risk_gauge(df_history['probability'].mean()), use_container_width=True)
     
     with tab2:
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(plot_amount_analysis(df_history), use_container_width=True)
+            fig = plot_amount_analysis(df_history)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Not enough data for amount analysis")
         with col2:
             # Amount statistics
             st.markdown("### Amount Statistics")
@@ -978,32 +971,37 @@ def research_dashboard_page():
             st.dataframe(stats_df, use_container_width=True)
     
     with tab3:
-        st.plotly_chart(plot_temporal_analysis(df_history), use_container_width=True)
+        fig = plot_temporal_analysis(df_history)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Not enough data for temporal analysis")
     
     with tab4:
         # Feature analysis
         st.markdown("### PCA Feature Analysis")
-        pca_df = pd.DataFrame([h['pca_features'] for h in st.session_state.prediction_history])
-        
-        if len(pca_df) > 1:
-            col1, col2 = st.columns(2)
-            with col1:
-                # Feature statistics
-                st.markdown("#### Feature Statistics")
-                stats_df = pca_df.describe().T
-                stats_df = stats_df[['mean', 'std', 'min', 'max']]
-                st.dataframe(stats_df.head(10), use_container_width=True)
+        try:
+            pca_df = pd.DataFrame([h['pca_features'] for h in st.session_state.prediction_history])
             
-            with col2:
-                # Correlation heatmap
-                fig = plot_feature_correlation(pca_df)
-                if fig:
-                    st.pyplot(fig)
-        else:
-            st.info("Need more predictions for feature analysis")
+            if len(pca_df) > 1:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("#### Feature Statistics")
+                    stats_df = pca_df.describe().T
+                    stats_df = stats_df[['mean', 'std', 'min', 'max']]
+                    st.dataframe(stats_df.head(10), use_container_width=True)
+                
+                with col2:
+                    fig = plot_feature_correlation(pca_df)
+                    if fig:
+                        st.pyplot(fig)
+            else:
+                st.info("Need more predictions for feature analysis")
+        except:
+            st.info("Feature data not available")
     
     # Research Insights from DeepSeek
-    if hasattr(st.session_state, 'deepseek_api_key') and st.session_state.deepseek_api_key:
+    if st.session_state.deepseek_api_key:
         st.markdown("---")
         st.subheader("🤖 AI Research Insights")
         if st.button("Generate Research Insights", type="primary"):
@@ -1019,7 +1017,7 @@ def ai_explanations_page():
     st.header("🤖 AI-Powered Explanations")
     st.markdown("*DeepSeek AI analysis of fraud detection results*")
     
-    if not hasattr(st.session_state, 'deepseek_api_key') or not st.session_state.deepseek_api_key:
+    if not st.session_state.deepseek_api_key:
         st.warning("⚠️ Please enter your DeepSeek API key in the sidebar to use this feature")
         return
     
@@ -1036,14 +1034,20 @@ def ai_explanations_page():
             st.markdown(exp['explanation'])
 
 # ============================================
-# Page Functions - Model Evaluation
+# Page Functions - Model Evaluation - FIXED
 # ============================================
 def model_evaluation_page():
     st.header("📉 Model Evaluation & Performance")
     st.markdown("*Comprehensive model performance metrics for research*")
     
     if len(st.session_state.prediction_history) == 0:
-        st.info("No data available for evaluation")
+        st.info("📊 No data available for evaluation. Please make some predictions first!")
+        st.markdown("""
+        ### How to evaluate the model:
+        1. Go to **Single Prediction** tab
+        2. Make multiple predictions with different scenarios
+        3. Return here to see performance metrics
+        """)
         return
     
     df_history = pd.DataFrame(st.session_state.prediction_history)
@@ -1073,9 +1077,15 @@ def model_evaluation_page():
     col1, col2 = st.columns(2)
     with col1:
         # Confusion Matrix
-        cm = np.array(metrics['confusion_matrix'])
-        fig = plot_confusion_matrix(cm)
-        st.pyplot(fig)
+        try:
+            cm = np.array(metrics['confusion_matrix'])
+            fig = plot_confusion_matrix(cm)
+            if fig:
+                st.pyplot(fig)
+            else:
+                st.info("Not enough data for confusion matrix")
+        except:
+            st.info("Not enough data for confusion matrix")
     
     with col2:
         # ROC Curve
@@ -1086,10 +1096,16 @@ def model_evaluation_page():
             st.info("Need more varied predictions for ROC curve")
     
     # Classification Report
-    st.subheader("📋 Detailed Classification Report")
-    report = classification_report(y_true, y_pred, target_names=['Legitimate', 'Fraud'], output_dict=True)
-    report_df = pd.DataFrame(report).T
-    st.dataframe(report_df, use_container_width=True)
+    try:
+        if len(np.unique(y_true)) > 1:
+            st.subheader("📋 Detailed Classification Report")
+            report = classification_report(y_true, y_pred, target_names=['Legitimate', 'Fraud'], output_dict=True)
+            report_df = pd.DataFrame(report).T
+            st.dataframe(report_df, use_container_width=True)
+        else:
+            st.info("Need both fraud and legitimate cases for classification report")
+    except:
+        st.info("Not enough data for classification report")
     
     # Research Metrics
     st.subheader("📈 Research Metrics")

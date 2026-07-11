@@ -298,45 +298,63 @@ class DeepSeekExplainer:
 # ============================================
 @st.cache_resource
 def load_model():
-    """Load the trained model pipeline"""
+    """Load the trained model pipeline - FIXED VERSION"""
     import os
     import pickle
+    import importlib.util
     
     current_dir = os.path.dirname(os.path.abspath(__file__))
     root_dir = os.path.dirname(current_dir)
     
+    # Try multiple possible paths
     possible_paths = [
         os.path.join(root_dir, 'models', 'fraud_detection_pipeline.pkl'),
         os.path.join(current_dir, 'models', 'fraud_detection_pipeline.pkl'),
         os.path.join(current_dir, '..', 'models', 'fraud_detection_pipeline.pkl'),
+        os.path.join(root_dir, 'models', 'pipeline.cpython-313.py'),  # Your current file
+        os.path.join(current_dir, 'models', 'pipeline.cpython-313.py'),
     ]
     
     for model_path in possible_paths:
         if os.path.exists(model_path):
             try:
-                model = joblib.load(model_path)
-                st.sidebar.success(f"✅ Model loaded from: {model_path}")
-                return model
+                # Try joblib first (for .pkl files)
+                if model_path.endswith('.pkl'):
+                    model = joblib.load(model_path)
+                    st.sidebar.success(f"✅ Model loaded from: {model_path}")
+                    return model
+                else:
+                    # For .py files, try to import
+                    st.sidebar.warning(f"⚠️ Found Python file: {model_path}")
+                    st.sidebar.info("This appears to be a Python source file, not a trained model.")
+                    
+                    # Check if it's a pickle file with different extension
+                    try:
+                        with open(model_path, 'rb') as f:
+                            model = pickle.load(f)
+                        return model
+                    except:
+                        pass
             except Exception as e:
+                st.sidebar.error(f"Error loading from {model_path}: {str(e)}")
                 continue
     
-    st.sidebar.error("❌ Model not found in any location!")
-    return None
-
-@st.cache_resource
-def get_scaler():
-    """Load the scaler if using separate files"""
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    root_dir = os.path.dirname(current_dir)
+    # If we get here, no model was found
+    st.sidebar.error("❌ Model not found!")
     
-    scaler_paths = [
-        os.path.join(root_dir, 'models', 'scaler.pkl'),
-        os.path.join(current_dir, 'models', 'scaler.pkl'),
-    ]
+    # Show debug info
+    with st.sidebar.expander("🔍 Debug Info", expanded=True):
+        st.write("Looking in these locations:")
+        for path in possible_paths:
+            st.write(f"- {path}")
+        
+        # List files in models directory
+        models_dir = os.path.join(root_dir, 'models')
+        if os.path.exists(models_dir):
+            st.write(f"\nFiles in {models_dir}:")
+            for f in os.listdir(models_dir):
+                st.write(f"  - {f}")
     
-    for path in scaler_paths:
-        if os.path.exists(path):
-            return joblib.load(path)
     return None
 
 # ============================================

@@ -152,12 +152,14 @@ class FraudDetectionPipeline:
     
     def predict(self, X):
         X_scaled = X.copy()
-        X_scaled[['Time', 'Amount']] = self.scaler.transform(X[['Time', 'Amount']])
+        if self.scaler is not None:
+            X_scaled[['Time', 'Amount']] = self.scaler.transform(X[['Time', 'Amount']])
         return self.model.predict(X_scaled)
     
     def predict_proba(self, X):
         X_scaled = X.copy()
-        X_scaled[['Time', 'Amount']] = self.scaler.transform(X[['Time', 'Amount']])
+        if self.scaler is not None:
+            X_scaled[['Time', 'Amount']] = self.scaler.transform(X[['Time', 'Amount']])
         return self.model.predict_proba(X_scaled)
 
 # ============================================
@@ -175,6 +177,8 @@ if 'experiment_results' not in st.session_state:
     st.session_state.experiment_results = {}
 if 'model_metrics' not in st.session_state:
     st.session_state.model_metrics = {}
+if 'random_values' not in st.session_state:
+    st.session_state.random_values = {}
 
 # ============================================
 # DeepSeek API Integration
@@ -189,6 +193,9 @@ class DeepSeekExplainer:
     
     def explain_prediction(self, input_data, prediction, probability, pca_features):
         """Get AI-powered explanation for a prediction"""
+        
+        if not self.api_key:
+            return "⚠️ DeepSeek API key not configured. Please add your API key in the sidebar."
         
         # Prepare the prompt
         prompt = f"""
@@ -232,12 +239,15 @@ class DeepSeekExplainer:
             if response.status_code == 200:
                 return response.json()['choices'][0]['message']['content']
             else:
-                return f"⚠️ API Error: {response.status_code} - {response.text}"
+                return f"⚠️ API Error: {response.status_code} - Please check your API key"
         except Exception as e:
             return f"⚠️ Error getting AI explanation: {str(e)}"
     
     def generate_research_insights(self, history_df):
         """Generate research insights from prediction history"""
+        
+        if not self.api_key:
+            return "⚠️ DeepSeek API key not configured. Please add your API key in the sidebar."
         
         if len(history_df) == 0:
             return "No data available for analysis."
@@ -294,67 +304,86 @@ class DeepSeekExplainer:
             return f"⚠️ Error: {str(e)}"
 
 # ============================================
-# Model Loading Functions
+# Model Loading Functions - FIXED
 # ============================================
 @st.cache_resource
 def load_model():
-    """Load the trained model pipeline - FIXED VERSION"""
+    """Load the trained model pipeline"""
     import os
     import pickle
-    import importlib.util
+    
+    # Get the directory where this script is located
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # The models folder is at the root level (sibling to app folder)
+    root_dir = os.path.dirname(current_dir)
+    
+    # Build the correct path - models folder is at root level
+    model_path = os.path.join(root_dir, 'models', 'fraud_detection_pipeline.pkl')
+    
+    # Alternative paths to try
+    possible_paths = [
+        model_path,  # Root/models/
+        os.path.join(current_dir, '..', 'models', 'fraud_detection_pipeline.pkl'),  # Same as above
+        os.path.join(current_dir, 'models', 'fraud_detection_pipeline.pkl'),  # app/models/
+        os.path.join(root_dir, 'models', 'fraud_detection_pipeline.pkl'),  # Explicit root/models/
+    ]
+    
+    # Try each path
+    for path in possible_paths:
+        if os.path.exists(path):
+            try:
+                model = joblib.load(path)
+                return model
+            except Exception as e:
+                st.sidebar.warning(f"Error loading from {path}: {str(e)}")
+                continue
+    
+    # If we get here, no model was found
+    st.sidebar.error("❌ Model not found in any location!")
+    
+    # Show directory contents for debugging
+    with st.sidebar.expander("📁 Directory Contents", expanded=False):
+        # Show root directory
+        if os.path.exists(root_dir):
+            st.write(f"Root directory ({root_dir}):")
+            files = os.listdir(root_dir)
+            st.code("\n".join(files[:15]) if files else "Empty")
+        
+        # Show models directory if it exists
+        models_dir = os.path.join(root_dir, 'models')
+        if os.path.exists(models_dir):
+            st.write(f"Models directory ({models_dir}):")
+            files = os.listdir(models_dir)
+            st.code("\n".join(files) if files else "Empty")
+    
+    return None
+
+@st.cache_resource
+def get_scaler():
+    """Load the scaler if using separate files - FIXED"""
+    import os
     
     current_dir = os.path.dirname(os.path.abspath(__file__))
     root_dir = os.path.dirname(current_dir)
     
-    # Try multiple possible paths
-    possible_paths = [
-        os.path.join(root_dir, 'models', 'fraud_detection_pipeline.pkl'),
-        os.path.join(current_dir, 'models', 'fraud_detection_pipeline.pkl'),
-        os.path.join(current_dir, '..', 'models', 'fraud_detection_pipeline.pkl'),
-        os.path.join(root_dir, 'models', 'pipeline.cpython-313.py'),  # Your current file
-        os.path.join(current_dir, 'models', 'pipeline.cpython-313.py'),
+    scaler_paths = [
+        os.path.join(root_dir, 'models', 'scaler.pkl'),
+        os.path.join(current_dir, 'models', 'scaler.pkl'),
+        os.path.join(current_dir, '..', 'models', 'scaler.pkl'),
     ]
     
-    for model_path in possible_paths:
-        if os.path.exists(model_path):
+    for path in scaler_paths:
+        if os.path.exists(path):
             try:
-                # Try joblib first (for .pkl files)
-                if model_path.endswith('.pkl'):
-                    model = joblib.load(model_path)
-                    st.sidebar.success(f"✅ Model loaded from: {model_path}")
-                    return model
-                else:
-                    # For .py files, try to import
-                    st.sidebar.warning(f"⚠️ Found Python file: {model_path}")
-                    st.sidebar.info("This appears to be a Python source file, not a trained model.")
-                    
-                    # Check if it's a pickle file with different extension
-                    try:
-                        with open(model_path, 'rb') as f:
-                            model = pickle.load(f)
-                        return model
-                    except:
-                        pass
+                scaler = joblib.load(path)
+                return scaler
             except Exception as e:
-                st.sidebar.error(f"Error loading from {model_path}: {str(e)}")
+                st.sidebar.warning(f"Could not load scaler from {path}: {str(e)}")
                 continue
     
-    # If we get here, no model was found
-    st.sidebar.error("❌ Model not found!")
-    
-    # Show debug info
-    with st.sidebar.expander("🔍 Debug Info", expanded=True):
-        st.write("Looking in these locations:")
-        for path in possible_paths:
-            st.write(f"- {path}")
-        
-        # List files in models directory
-        models_dir = os.path.join(root_dir, 'models')
-        if os.path.exists(models_dir):
-            st.write(f"\nFiles in {models_dir}:")
-            for f in os.listdir(models_dir):
-                st.write(f"  - {f}")
-    
+    # Return None if no scaler found (model might have built-in scaling)
+    st.sidebar.info("ℹ️ No separate scaler found - using model's internal scaling if available")
     return None
 
 # ============================================
@@ -366,8 +395,8 @@ def save_prediction_to_history(input_data, prediction, probability, pca_features
         'timestamp': datetime.now(),
         'amount': input_data['Amount'],
         'time': input_data['Time'],
-        'prediction': prediction,
-        'probability': probability,
+        'prediction': int(prediction),
+        'probability': float(probability),
         'risk_level': 'High' if probability > 0.5 else 'Medium' if probability > 0.2 else 'Low',
         'pca_features': pca_features.copy()
     })
@@ -434,7 +463,7 @@ def calculate_model_metrics(y_true, y_pred, y_prob):
         'precision': precision_score(y_true, y_pred, zero_division=0),
         'recall': recall_score(y_true, y_pred, zero_division=0),
         'f1_score': f1_score(y_true, y_pred, zero_division=0),
-        'roc_auc': roc_auc_score(y_true, y_prob),
+        'roc_auc': roc_auc_score(y_true, y_prob) if len(np.unique(y_true)) > 1 else 0.5,
         'confusion_matrix': confusion_matrix(y_true, y_pred).tolist()
     }
     return metrics
@@ -508,6 +537,9 @@ def plot_confusion_matrix(cm, title="Confusion Matrix"):
 
 def plot_roc_curve(y_true, y_prob):
     """Plot ROC curve"""
+    if len(np.unique(y_true)) < 2:
+        return None
+    
     fpr, tpr, _ = roc_curve(y_true, y_prob)
     roc_auc = auc(fpr, tpr)
     
@@ -615,92 +647,7 @@ def plot_feature_correlation(pca_features_df):
     return None
 
 # ============================================
-# Main Application
-# ============================================
-def main():
-    # Academic Header
-    st.markdown("""
-    <div class="academic-header">
-        <h1 style="color: white; text-align: center; font-size: 2.5rem;">
-            📊 Credit Card Fraud Detection System
-        </h1>
-        <p style="color: white; text-align: center; font-size: 1.2rem;">
-            Advanced Machine Learning for Financial Security • Academic Research Edition
-        </p>
-        <p style="color: white; text-align: center; font-size: 1rem;">
-            <strong>Author:</strong> CYRUS EBERE ORJI
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Model loading
-    model = load_model()
-    if model is None:
-        st.stop()
-    scaler = get_scaler()
-    
-    # Sidebar
-    with st.sidebar:
-        st.image("https://cdn-icons-png.flaticon.com/512/330/330709.png", width=80)
-        st.markdown("---")
-        
-        # Navigation
-        page = st.radio(
-            "📌 Navigation",
-            ["🔍 Single Prediction", "📊 Batch Analysis", "📈 Research Dashboard", 
-             "🤖 AI Explanations", "📉 Model Evaluation", "📝 Research Notes"]
-        )
-        
-        st.markdown("---")
-        
-        # Session Stats
-        st.markdown("### 📊 Session Statistics")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Total Predictions", st.session_state.total_predictions)
-        with col2:
-            st.metric("Fraud Detected", st.session_state.fraud_count)
-        
-        if st.session_state.total_predictions > 0:
-            fraud_rate = st.session_state.fraud_count / st.session_state.total_predictions * 100
-            st.metric("Fraud Rate", f"{fraud_rate:.2f}%")
-        
-        st.markdown("---")
-        
-        # Settings
-        st.markdown("### ⚙️ Settings")
-        if st.button("🗑️ Clear History", use_container_width=True):
-            st.session_state.prediction_history = []
-            st.session_state.total_predictions = 0
-            st.session_state.fraud_count = 0
-            st.session_state.deepseek_explanations = []
-            st.rerun()
-        
-        # DeepSeek API Key Input
-        st.markdown("---")
-        st.markdown("### 🤖 DeepSeek AI")
-        api_key = st.text_input("API Key (optional)", type="password", 
-                                placeholder="Enter DeepSeek API key")
-        if api_key:
-            st.session_state.deepseek_api_key = api_key
-            st.success("✅ API Key set")
-    
-    # Page Routing
-    if page == "🔍 Single Prediction":
-        single_prediction_page(model, scaler)
-    elif page == "📊 Batch Analysis":
-        batch_analysis_page(model, scaler)
-    elif page == "📈 Research Dashboard":
-        research_dashboard_page()
-    elif page == "🤖 AI Explanations":
-        ai_explanations_page()
-    elif page == "📉 Model Evaluation":
-        model_evaluation_page()
-    else:
-        research_notes_page()
-
-# ============================================
-# Single Prediction Page (Enhanced)
+# Page Functions - Single Prediction
 # ============================================
 def single_prediction_page(model, scaler):
     st.header("🔍 Single Transaction Analysis")
@@ -745,7 +692,7 @@ def single_prediction_page(model, scaler):
             col_idx = (i - 1) % 4
             with cols[col_idx]:
                 default_val = 0.0
-                if 'random_values' in st.session_state and i in st.session_state.random_values:
+                if 'random_values' in st.session_state and f'V{i}' in st.session_state.random_values:
                     default_val = st.session_state.random_values[f'V{i}']
                 
                 pca_features[f'V{i}'] = st.number_input(
@@ -770,8 +717,15 @@ def single_prediction_page(model, scaler):
             try:
                 # Make prediction
                 if hasattr(model, 'predict'):
-                    prediction = model.predict(input_df)[0]
-                    probability = model.predict_proba(input_df)[0][1]
+                    # If scaler exists, use it
+                    if scaler is not None:
+                        input_df_scaled = input_df.copy()
+                        input_df_scaled[['Time', 'Amount']] = scaler.transform(input_df[['Time', 'Amount']])
+                        prediction = model.predict(input_df_scaled)[0]
+                        probability = model.predict_proba(input_df_scaled)[0][1]
+                    else:
+                        prediction = model.predict(input_df)[0]
+                        probability = model.predict_proba(input_df)[0][1]
                 else:
                     prediction, probability = predict_separate(model, scaler, input_df)
                 
@@ -866,9 +820,10 @@ def single_prediction_page(model, scaler):
                     
             except Exception as e:
                 st.error(f"Error making prediction: {str(e)}")
+                st.exception(e)
 
 # ============================================
-# Batch Analysis Page (Enhanced)
+# Page Functions - Batch Analysis
 # ============================================
 def batch_analysis_page(model, scaler):
     st.header("📊 Batch Transaction Analysis")
@@ -899,7 +854,7 @@ def batch_analysis_page(model, scaler):
                     
                     df_ordered = df[expected_columns].copy()
                     
-                    if scaler:
+                    if scaler is not None:
                         df_scaled = df_ordered.copy()
                         df_scaled[['Time', 'Amount']] = scaler.transform(df_ordered[['Time', 'Amount']])
                         predictions = model.predict(df_scaled)
@@ -965,7 +920,7 @@ def batch_analysis_page(model, scaler):
             st.info("Please ensure your CSV has the correct columns")
 
 # ============================================
-# Research Dashboard Page
+# Page Functions - Research Dashboard
 # ============================================
 def research_dashboard_page():
     st.header("📈 Research Dashboard")
@@ -1058,7 +1013,7 @@ def research_dashboard_page():
                 st.markdown(f'<div class="deepseek-response">{insights}</div>', unsafe_allow_html=True)
 
 # ============================================
-# AI Explanations Page
+# Page Functions - AI Explanations
 # ============================================
 def ai_explanations_page():
     st.header("🤖 AI-Powered Explanations")
@@ -1081,7 +1036,7 @@ def ai_explanations_page():
             st.markdown(exp['explanation'])
 
 # ============================================
-# Model Evaluation Page
+# Page Functions - Model Evaluation
 # ============================================
 def model_evaluation_page():
     st.header("📉 Model Evaluation & Performance")
@@ -1097,7 +1052,7 @@ def model_evaluation_page():
     st.subheader("📊 Performance Metrics")
     
     y_true = df_history['prediction']
-    y_pred = df_history['prediction']  # Assuming predictions are stored
+    y_pred = df_history['prediction']
     y_prob = df_history['probability']
     
     metrics = calculate_model_metrics(y_true, y_pred, y_prob)
@@ -1125,7 +1080,10 @@ def model_evaluation_page():
     with col2:
         # ROC Curve
         fig = plot_roc_curve(y_true, y_prob)
-        st.plotly_chart(fig, use_container_width=True)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Need more varied predictions for ROC curve")
     
     # Classification Report
     st.subheader("📋 Detailed Classification Report")
@@ -1135,20 +1093,27 @@ def model_evaluation_page():
     
     # Research Metrics
     st.subheader("📈 Research Metrics")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        tn, fp, fn, tp = cm.ravel()
-        st.metric("True Positives", tp)
-        st.metric("True Negatives", tn)
-    with col2:
-        st.metric("False Positives", fp)
-        st.metric("False Negatives", fn)
-    with col3:
-        st.metric("Precision (Fraud)", f"{(tp/(tp+fp) if tp+fp>0 else 0):.3f}")
-        st.metric("Recall (Fraud)", f"{(tp/(tp+fn) if tp+fn>0 else 0):.3f}")
+    try:
+        cm_array = np.array(metrics['confusion_matrix'])
+        if cm_array.shape == (2, 2):
+            tn, fp, fn, tp = cm_array.ravel()
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("True Positives", int(tp))
+                st.metric("True Negatives", int(tn))
+            with col2:
+                st.metric("False Positives", int(fp))
+                st.metric("False Negatives", int(fn))
+            with col3:
+                precision = tp/(tp+fp) if (tp+fp) > 0 else 0
+                recall = tp/(tp+fn) if (tp+fn) > 0 else 0
+                st.metric("Precision (Fraud)", f"{precision:.3f}")
+                st.metric("Recall (Fraud)", f"{recall:.3f}")
+    except:
+        pass
 
 # ============================================
-# Research Notes Page
+# Page Functions - Research Notes
 # ============================================
 def research_notes_page():
     st.header("📝 Research Notes & Documentation")
@@ -1248,13 +1213,103 @@ def predict_separate(model, scaler, input_df):
                        'V20', 'V21', 'V22', 'V23', 'V24', 'V25', 'V26', 'V27', 'V28', 'Amount']
     
     input_ordered = input_df[expected_columns].copy()
-    input_scaled = input_ordered.copy()
-    input_scaled[['Time', 'Amount']] = scaler.transform(input_ordered[['Time', 'Amount']])
     
-    prediction = model.predict(input_scaled)[0]
-    probability = model.predict_proba(input_scaled)[0][1]
+    if scaler is not None:
+        input_scaled = input_ordered.copy()
+        input_scaled[['Time', 'Amount']] = scaler.transform(input_ordered[['Time', 'Amount']])
+        prediction = model.predict(input_scaled)[0]
+        probability = model.predict_proba(input_scaled)[0][1]
+    else:
+        prediction = model.predict(input_ordered)[0]
+        probability = model.predict_proba(input_ordered)[0][1]
     
     return prediction, probability
+
+# ============================================
+# Main Application
+# ============================================
+def main():
+    # Academic Header
+    st.markdown("""
+    <div class="academic-header">
+        <h1 style="color: white; text-align: center; font-size: 2.5rem;">
+            📊 Credit Card Fraud Detection System
+        </h1>
+        <p style="color: white; text-align: center; font-size: 1.2rem;">
+            Advanced Machine Learning for Financial Security • Academic Research Edition
+        </p>
+        <p style="color: white; text-align: center; font-size: 1rem;">
+            <strong>Author:</strong> CYRUS EBERE ORJI
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Model loading
+    model = load_model()
+    if model is None:
+        st.stop()
+    
+    scaler = get_scaler()
+    
+    # Sidebar
+    with st.sidebar:
+        st.image("https://cdn-icons-png.flaticon.com/512/330/330709.png", width=80)
+        st.markdown("---")
+        
+        # Navigation
+        page = st.radio(
+            "📌 Navigation",
+            ["🔍 Single Prediction", "📊 Batch Analysis", "📈 Research Dashboard", 
+             "🤖 AI Explanations", "📉 Model Evaluation", "📝 Research Notes"]
+        )
+        
+        st.markdown("---")
+        
+        # Session Stats
+        st.markdown("### 📊 Session Statistics")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Predictions", st.session_state.total_predictions)
+        with col2:
+            st.metric("Fraud Detected", st.session_state.fraud_count)
+        
+        if st.session_state.total_predictions > 0:
+            fraud_rate = st.session_state.fraud_count / st.session_state.total_predictions * 100
+            st.metric("Fraud Rate", f"{fraud_rate:.2f}%")
+        
+        st.markdown("---")
+        
+        # Settings
+        st.markdown("### ⚙️ Settings")
+        if st.button("🗑️ Clear History", use_container_width=True):
+            st.session_state.prediction_history = []
+            st.session_state.total_predictions = 0
+            st.session_state.fraud_count = 0
+            st.session_state.deepseek_explanations = []
+            st.rerun()
+        
+        # DeepSeek API Key Input
+        st.markdown("---")
+        st.markdown("### 🤖 DeepSeek AI")
+        api_key = st.text_input("API Key (optional)", type="password", 
+                                placeholder="Enter DeepSeek API key")
+        if api_key:
+            st.session_state.deepseek_api_key = api_key
+            st.success("✅ API Key set")
+    
+    # Page Routing
+    if page == "🔍 Single Prediction":
+        single_prediction_page(model, scaler)
+    elif page == "📊 Batch Analysis":
+        batch_analysis_page(model, scaler)
+    elif page == "📈 Research Dashboard":
+        research_dashboard_page()
+    elif page == "🤖 AI Explanations":
+        ai_explanations_page()
+    elif page == "📉 Model Evaluation":
+        model_evaluation_page()
+    else:
+        research_notes_page()
 
 if __name__ == "__main__":
     main()
